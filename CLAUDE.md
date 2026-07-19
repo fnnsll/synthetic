@@ -32,6 +32,18 @@ Key libraries in play: `pandas`, `numpy`, `scikit-learn`, `networkx`, `umap-lear
 
 `black` and `isort` are configured (line-length 100) but there is no source tree to lint since all code is in notebooks. `pytest` is a listed dependency but there are no test files in the repo.
 
+## nogan_synth package (recommended path)
+
+`src/nogan_synth/` is an installable sklearn-style package (`poetry install` picks it up via `pyproject.toml`'s `packages` entry) that superseded the notebook pipeline's approach. Several synthesizer variants were tried; **`AutoregressiveSynthesizer` (in `autoreg_synth.py`) is the current best/default method** — sequential CART-based conditional synthesis (each column conditioned on every already-generated column via a decision tree, real training value sampled from whichever leaf a synthetic row lands in). At `min_samples_leaf=2` (the class default) it beats every other variant tried on `csv/flat-training.csv`: higher accuracy at every tier (overall 0.979 vs `NoGANSynthesizer` mixup's 0.965, trivariate 0.966 vs 0.951), same discriminator AUC (~0.58), zero exact-duplicate rows. Run `scripts/run_autoreg_prototype.py` for the full QA report.
+
+Other variants, kept as tested/documented negative or partial results (see their module docstrings for why):
+- `NoGANSynthesizer` (`synthesizer.py`) — kernel-weighted nearest-neighbor mixup blending. Previously the best method before the autoregressive one; still useful as a comparison baseline. Has a `no_blend` option (default `pumpkin,dog,goldfish,mouse` in the script) for columns where continuous blending only shrinks variance with no benefit.
+- `TreeKernelSynthesizer` / `BlockKernelSynthesizer` (`tree_synth.py`, `block_synth.py`) — Chow-Liu tree conditioning; loses badly (AUC ~0.98-0.999) because this dataset's correlation structure is one dense blob, not tree-shaped.
+- A Gaussian-copula numeric mode was tried in `NoGANSynthesizer` and removed entirely (see git history / `synthesizer.py` docstring) — broke on point-mass/near-binary numeric columns.
+- `reweighting.py` (KMM/Nystrom) and `relationships.py` (sum/correlation-cluster detection) are diagnostic/correction tools, not synthesizers themselves.
+
+`tests/` covers all of the above; run `poetry run pytest tests/`.
+
 ## Working conventions
 
 - Notebook cells build on prior cell state (e.g. `X_train`, `corr_df`, `component_list`, `updated_components`, `embedding_o` are defined earlier and reused many cells later) — cells are not independently runnable; execute top-to-bottom.

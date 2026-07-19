@@ -10,11 +10,13 @@ from .reweighting import (
     kernel_mean_match_nystrom,
     weighted_resample,
 )
+from .autoreg_synth import AutoregressiveSynthesizer
 from .block_synth import BlockKernelSynthesizer
 from .synthesizer import NoGANSynthesizer
 from .tree_synth import TreeKernelSynthesizer, association_matrix
 
 __all__ = [
+    "AutoregressiveSynthesizer",
     "BlockKernelSynthesizer",
     "NoGANSynthesizer",
     "TreeKernelSynthesizer",
