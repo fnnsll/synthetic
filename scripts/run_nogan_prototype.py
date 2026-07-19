@@ -23,6 +23,15 @@ def main():
     parser.add_argument("--jitter", type=float, default=0.02)
     parser.add_argument("--n-neighbors", type=int, default=10)
     parser.add_argument("--embedding", default="onehot")
+    parser.add_argument(
+        "--no-blend",
+        default="pumpkin,dog,goldfish,mouse",
+        help="comma-separated column names to skip continuous blending for -- "
+        "these are wide-range but roughly-symmetric numeric columns where mixup's "
+        "blend only shrinks variance with no distribution-shape benefit; a single "
+        "real weighted-pick value instead measurably improves univariate accuracy "
+        "(pumpkin 0.943->0.965) with no discriminator-AUC cost (see nogan-noblend4-report.html)",
+    )
     parser.add_argument("--report-path", default="nogan-report.html")
     parser.add_argument("--out-csv", default="submission_nogan_1.csv")
     args = parser.parse_args()
@@ -30,10 +39,12 @@ def main():
     df = pd.read_csv("csv/flat-training.csv")
     X_train, X_test = train_test_split(df, train_size=0.8)
 
+    no_blend = [c for c in args.no_blend.split(",") if c]
     synth = NoGANSynthesizer(
         embedding=args.embedding,
         jitter=args.jitter,
         n_neighbors=args.n_neighbors,
+        no_blend=no_blend,
         random_state=42,
     )
     synth.fit(X_train)

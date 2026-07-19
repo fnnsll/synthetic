@@ -56,6 +56,7 @@ class NoGANSynthesizer(BaseEstimator):
         jitter: float = 0.2,
         n_mix: int = 2,
         match_marginals: bool | list[str] = False,
+        no_blend: list[str] = (),
         random_state: int | None = None,
     ):
         self.embedding = embedding
@@ -65,6 +66,7 @@ class NoGANSynthesizer(BaseEstimator):
         self.jitter = jitter
         self.n_mix = n_mix
         self.match_marginals = match_marginals
+        self.no_blend = no_blend
         self.random_state = random_state
 
     def fit(self, X: pd.DataFrame) -> "NoGANSynthesizer":
@@ -104,8 +106,24 @@ class NoGANSynthesizer(BaseEstimator):
         # in the synthetic output. Those columns instead get a single
         # weighted-multinomial member pick (like categoricals) so a real
         # value from one member never gets NaN-contaminated by the other.
-        self._dense_num_idx_ = [i for i, c in enumerate(num_cols) if not self.X_[c].isna().any()]
-        self._nullable_num_idx_ = [i for i, c in enumerate(num_cols) if self.X_[c].isna().any()]
+        # `no_blend` opts in more columns to that same single-value pick --
+        # for wide-range columns, any convex blend shrinks variance toward
+        # the center regardless of transform space (tested log and
+        # Yeo-Johnson blending, both flat-to-worse); using one real member's
+        # exact value instead trades away only the blend's marginal
+        # diversity boost for that column, not its joint consistency (the
+        # chosen value is still a real, jointly-consistent observation).
+        no_blend_set = set(self.no_blend)
+        self._dense_num_idx_ = [
+            i
+            for i, c in enumerate(num_cols)
+            if not self.X_[c].isna().any() and c not in no_blend_set
+        ]
+        self._nullable_num_idx_ = [
+            i
+            for i, c in enumerate(num_cols)
+            if self.X_[c].isna().any() or c in no_blend_set
+        ]
 
         return self
 
