@@ -3,6 +3,7 @@ name = "synthetic"
 version = "0.1.0"
 description = ""
 authors = ["Martin Finn-Sell"]
+packages = [{include = "nogan_synth", from = "src"}]
 
 [tool.poetry.dependencies]
 python =  ">=3.11,<3.13"
