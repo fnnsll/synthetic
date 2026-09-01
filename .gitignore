@@ -1,3 +1,9 @@
+# downloaded MOSTLY AI Prize eval data (scripts/ingest_prize_eval.py)
+csv/prize/
+
 __pycache__/
 *.pyc
 *.egg-info/
+
+# session scratch logs
+scratch_*.log

@@ -12,7 +12,7 @@ from sklearn.model_selection import train_test_split
 
 import pandas as pd
 
-from nogan_synth import NoGANSynthesizer
+from nogan_synth import NoGANSynthesizer, select_subset
 from nogan_synth.evaluate import run_qa_report
 
 N_SAMPLES = 100_000
@@ -32,12 +32,32 @@ def main():
         "real weighted-pick value instead measurably improves univariate accuracy "
         "(pumpkin 0.943->0.965) with no discriminator-AUC cost (see nogan-noblend4-report.html)",
     )
+    parser.add_argument("--cat-resample", default="copy", choices=["copy", "block", "kernel"],
+                        help="categorical draw: copy one neighbor's whole tuple (default), "
+                        "or recombine per correlated block / per column to break record copying")
     parser.add_argument("--report-path", default="nogan-report.html")
     parser.add_argument("--out-csv", default="submission_nogan_1.csv")
+    parser.add_argument(
+        "--prize-holdout",
+        nargs="?",
+        const="csv/prize/stage1/flat-holdout.csv.gz",
+        help="score against the real MOSTLY AI Prize holdout (run "
+        "scripts/ingest_prize_eval.py first) instead of a random 80/20 split; "
+        "fits on the full training set. Optional path overrides the default.",
+    )
+    parser.add_argument("--pool-multiplier", type=float, default=1.0,
+                        help="sample POOL_MULTIPLIER*100k rows, then select 100k from them")
+    parser.add_argument("--select", action="store_true",
+                        help="run marginal-matching subset selection on the pool")
+    parser.add_argument("--select-iterations", type=int, default=500)
+    parser.add_argument("--select-rewarm", type=int, default=None)
     args = parser.parse_args()
 
     df = pd.read_csv("csv/flat-training.csv")
-    X_train, X_test = train_test_split(df, train_size=0.8)
+    if args.prize_holdout:
+        X_train, X_test = df, pd.read_csv(args.prize_holdout)
+    else:
+        X_train, X_test = train_test_split(df, train_size=0.8)
 
     no_blend = [c for c in args.no_blend.split(",") if c]
     synth = NoGANSynthesizer(
@@ -48,7 +68,16 @@ def main():
         random_state=42,
     )
     synth.fit(X_train)
-    synthetic = synth.sample(N_SAMPLES)
+
+    synthetic = synth.sample(int(N_SAMPLES * args.pool_multiplier))
+
+    if args.select:
+        synthetic = select_subset(X_train, synthetic, N_SAMPLES,
+                                  iterations=args.select_iterations,
+                                  rewarm_patience=args.select_rewarm,
+                                  random_state=42, verbose=True)
+    elif len(synthetic) > N_SAMPLES:
+        synthetic = synthetic.sample(N_SAMPLES, random_state=42).reset_index(drop=True)
 
     synthetic.to_csv(args.out_csv, index=False)
 
