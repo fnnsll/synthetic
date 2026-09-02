@@ -32,6 +32,25 @@ from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from .tree_synth import association_matrix
 
 
+def greedy_association_order(df: pd.DataFrame, cols: list[str]) -> list[str]:
+    """Order ``cols`` by association strength (most globally connected
+    first, then whichever remaining column is most associated with the
+    columns already placed) -- the same ordering `AutoregressiveSynthesizer`
+    uses for its own columns, exposed standalone so `sequential.py` can order
+    a target-column subset independent of any lag/exogenous columns.
+    """
+    assoc = association_matrix(df, cols)
+    remaining = set(cols)
+    first = assoc.sum(axis=1).idxmax()
+    order = [first]
+    remaining.remove(first)
+    while remaining:
+        best = max(remaining, key=lambda c: assoc.loc[c, order].max())
+        order.append(best)
+        remaining.remove(best)
+    return order
+
+
 class AutoregressiveSynthesizer(BaseEstimator):
     def __init__(
         self,
@@ -46,16 +65,7 @@ class AutoregressiveSynthesizer(BaseEstimator):
         self.random_state = random_state
 
     def _greedy_order(self) -> list[str]:
-        assoc = association_matrix(self.X_, self.cols_)
-        remaining = set(self.cols_)
-        first = assoc.sum(axis=1).idxmax()
-        order = [first]
-        remaining.remove(first)
-        while remaining:
-            best = max(remaining, key=lambda c: assoc.loc[c, order].max())
-            order.append(best)
-            remaining.remove(best)
-        return order
+        return greedy_association_order(self.X_, self.cols_)
 
     def _fit_predictor_encoder(self, col: str):
         if col in self.cat_cols_:
@@ -128,17 +138,30 @@ class AutoregressiveSynthesizer(BaseEstimator):
         )
         return self
 
-    def sample(self, n_samples: int) -> pd.DataFrame:
+    def sample(self, n_samples: int | None = None, given: pd.DataFrame | None = None) -> pd.DataFrame:
+        """Generate rows. If ``given`` is passed, its columns (a prefix of
+        ``order_`` -- typically lag-1 features fixed by an outside caller,
+        see ``sequential.py``) are used as-is instead of generated, and only
+        used as predictors for the remaining columns. ``n_samples`` is then
+        taken from ``len(given)``.
+        """
         rng = np.random.default_rng(self.random_state)
         n_train = len(self.X_)
+        n_samples = len(given) if given is not None else n_samples
+        given_cols = set(given.columns) if given is not None else set()
 
         out = pd.DataFrame(index=range(n_samples), columns=self.cols_, dtype=object)
+        for c in given_cols:
+            out[c] = given[c].to_numpy()
 
         first = self.order_[0]
-        seed_idx = rng.integers(0, n_train, size=n_samples)
-        out[first] = self.X_[first].to_numpy()[seed_idx]
+        if first not in given_cols:
+            seed_idx = rng.integers(0, n_train, size=n_samples)
+            out[first] = self.X_[first].to_numpy()[seed_idx]
 
         for i, col in enumerate(self.order_[1:], start=1):
+            if col in given_cols:
+                continue
             predictors = self.order_[:i]
             Xp = np.hstack([self._transform_predictor(p, out[p]) for p in predictors])
             tree = self.models_[col]

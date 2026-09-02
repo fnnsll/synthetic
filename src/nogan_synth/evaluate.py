@@ -33,6 +33,32 @@ def run_qa_report(
     )
 
 
+def run_sequential_qa_report(
+    syn: pd.DataFrame,
+    trn: pd.DataFrame,
+    hol: pd.DataFrame,
+    group_col: str = "group_id",
+    report_path: str | Path = "sequential-report.html",
+    random_state: int | None = None,
+):
+    """Same as ``run_qa_report``, but for grouped/sequential data: passing
+    ``tgt_context_key=group_col`` tells mostlyai.qa the target data is 1:N
+    (one context/subject per group, N rows per context) so it also computes
+    coherence metrics (within-sequence consistency) alongside the usual
+    accuracy/similarity/distance ones. No separate context table -- there
+    are no static per-group attributes here, just the group key itself.
+    """
+    from mostlyai import qa
+
+    qa.init_logging()
+    if random_state is not None:
+        qa.set_random_state(random_state)
+    return qa.report(
+        syn_tgt_data=syn, trn_tgt_data=trn, hol_tgt_data=hol,
+        tgt_context_key=group_col, report_path=report_path,
+    )
+
+
 def discriminator_auc(real: pd.DataFrame, synthetic: pd.DataFrame, cv: int = 5) -> float:
     """Cross-validated AUC of a classifier trained to tell real from synthetic rows.
 

@@ -69,6 +69,7 @@ class NoGANSynthesizer(BaseEstimator):
         no_blend: list[str] = (),
         cat_resample: str = "copy",
         cat_block_threshold: float = 0.15,
+        cat_swap_frac: float = 1.0,
         random_state: int | None = None,
     ):
         self.embedding = embedding
@@ -81,6 +82,7 @@ class NoGANSynthesizer(BaseEstimator):
         self.no_blend = no_blend
         self.cat_resample = cat_resample
         self.cat_block_threshold = cat_block_threshold
+        self.cat_swap_frac = cat_swap_frac
         self.random_state = random_state
 
     def fit(self, X: pd.DataFrame) -> "NoGANSynthesizer":
@@ -282,31 +284,62 @@ class NoGANSynthesizer(BaseEstimator):
           discriminator then separates trivially on this dense dataset).
         - "block": one draw per (row, correlated block). Within-block joint
           copied intact from a real row; cross-block combination is new.
+
+        `cat_swap_frac` < 1 restricts the recombination to a weighted subset
+        of rows instead of applying it everywhere (which is what pushes
+        discriminator AUC to ~0.99 on this dataset -- see module docstring).
+        The rest keep the primary neighbor's tuple verbatim (like
+        `cat_resample="copy"`). Rows are picked by how interchangeable their
+        top-2 kernel-weighted neighbors are (weight ratio close to 1): those
+        are the "cheap" swaps -- the alternate neighbor is nearly as good a
+        local match as the primary, so substituting it barely perturbs the
+        marginal/joint fit while still breaking the exact-tuple copy.
         """
         dists = self.neighbor_dist_[seeds]
         log_w = -self.tau_ * dists**2
         win_idx = self.neighbor_idx_[seeds]
         rows = np.arange(len(seeds))
+        primary_idx = win_idx[:, 0]
         col_pos = {c: j for j, c in enumerate(self.cat_cols_)}
         groups = (
             [[c] for c in self.cat_cols_]
             if self.cat_resample == "kernel"
             else self.cat_blocks_
         )
+
+        swap_mask = np.ones(len(seeds), dtype=bool)
+        if self.cat_swap_frac < 1.0 and log_w.shape[1] > 1:
+            k = int(round(self.cat_swap_frac * len(seeds)))
+            swap_mask = np.zeros(len(seeds), dtype=bool)
+            if k > 0:
+                top2 = np.partition(log_w, -2, axis=1)[:, -2:]
+                ratio = top2[:, 0] - top2[:, 1]  # <=0; closer to 0 = interchangeable
+                swap_mask[np.argpartition(ratio, -k)[-k:]] = True
+
         out = np.empty((len(seeds), len(self.cat_cols_)), dtype=object)
         for grp in groups:
             gumbel = -np.log(-np.log(rng.uniform(size=log_w.shape) + 1e-300) + 1e-300)
             picked = win_idx[rows, np.argmax(log_w + gumbel, axis=1)]
+            chosen_idx = np.where(swap_mask, picked, primary_idx)
             for c in grp:
-                out[:, col_pos[c]] = self.X_[c].to_numpy()[picked]
+                out[:, col_pos[c]] = self.X_[c].to_numpy()[chosen_idx]
         return out
 
-    def sample(self, n_samples: int) -> pd.DataFrame:
+    def sample(self, n_samples: int | None = None, seeds: np.ndarray | None = None) -> pd.DataFrame:
+        """Generate rows. If ``seeds`` is passed (indices into the training
+        set), each output row is a kernel blend drawn from that seed row's
+        own neighbor window instead of a randomly chosen one -- used by
+        ``sequential.py`` to condition a step on "the real row nearest to
+        the given lag context" rather than an unconditioned draw.
+        """
         rng = np.random.default_rng(self.random_state)
         n_train = len(self.X_)
         n_mix = max(1, min(self.n_mix, len(self.neighbor_idx_[0])))
 
-        seeds = rng.integers(0, n_train, size=n_samples)
+        if seeds is None:
+            seeds = rng.integers(0, n_train, size=n_samples)
+        else:
+            n_samples = len(seeds)
         kernel_cats = (
             self._kernel_cat_resample(seeds, rng)
             if self.cat_resample in ("kernel", "block") and self.cat_cols_
