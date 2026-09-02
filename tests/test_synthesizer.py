@@ -121,6 +121,46 @@ def test_cat_resample_kernel_runs():
     assert set(out["e"].unique()) <= set(df["e"].unique())
 
 
+def test_cat_swap_frac_zero_always_uses_primary_neighbor():
+    df = _corr_cat_df()
+    synth = NoGANSynthesizer(
+        embedding="onehot", jitter=0.02, n_neighbors=40,
+        cat_resample="block", cat_swap_frac=0.0, random_state=0,
+    )
+    synth.fit(df)
+    seeds = np.arange(2000) % len(df)
+    cats = synth._kernel_cat_resample(seeds, np.random.default_rng(1))
+    primary_idx = synth.neighbor_idx_[seeds, 0]
+    primary = df[synth.cat_cols_].to_numpy()[primary_idx]
+    assert (cats == primary).all()
+
+
+def test_cat_swap_frac_partial_swaps_fewer_rows_than_full():
+    # a smaller cat_swap_frac should leave more rows' tuples equal to their
+    # primary neighbor's (unswapped) than frac=1.0 does.
+    df = _corr_cat_df()
+    seeds = np.arange(2000) % len(df)
+
+    def frac_of_rows_matching_primary(frac):
+        synth = NoGANSynthesizer(
+            embedding="onehot", jitter=0.02, n_neighbors=40,
+            cat_resample="block", cat_swap_frac=frac, random_state=0,
+        )
+        synth.fit(df)
+        rng = np.random.default_rng(1)
+        cats = synth._kernel_cat_resample(seeds, rng)
+        primary_idx = synth.neighbor_idx_[seeds, 0]
+        primary = df[synth.cat_cols_].to_numpy()[primary_idx]
+        return (cats == primary).all(axis=1).mean()
+
+    match_full = frac_of_rows_matching_primary(1.0)
+    match_partial = frac_of_rows_matching_primary(0.2)
+    match_zero = frac_of_rows_matching_primary(0.0)
+
+    assert match_zero == 1.0
+    assert match_zero > match_partial > match_full
+
+
 if __name__ == "__main__":
     test_fit_sample_shapes_and_dtypes()
     test_zero_jitter_reproduces_real_rows()

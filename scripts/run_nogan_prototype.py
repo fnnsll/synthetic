@@ -35,6 +35,10 @@ def main():
     parser.add_argument("--cat-resample", default="copy", choices=["copy", "block", "kernel"],
                         help="categorical draw: copy one neighbor's whole tuple (default), "
                         "or recombine per correlated block / per column to break record copying")
+    parser.add_argument("--cat-swap-frac", type=float, default=1.0,
+                        help="with cat_resample=block/kernel, only recombine this weighted "
+                        "fraction of rows (the ones whose top-2 kernel neighbors are most "
+                        "interchangeable); the rest keep the primary neighbor's tuple")
     parser.add_argument("--report-path", default="nogan-report.html")
     parser.add_argument("--out-csv", default="submission_nogan_1.csv")
     parser.add_argument(
@@ -51,6 +55,11 @@ def main():
                         help="run marginal-matching subset selection on the pool")
     parser.add_argument("--select-iterations", type=int, default=500)
     parser.add_argument("--select-rewarm", type=int, default=None)
+    parser.add_argument("--select-separation-weight", type=float, default=0.0,
+                        help="blend in a privacy term (0..1): prefer pool rows farther "
+                        "from any real training row (nearest-neighbor distance in "
+                        "embedding space) over rows closer to the marginal-match target. "
+                        "1.0 = separation only, no distributional objective at all.")
     args = parser.parse_args()
 
     df = pd.read_csv("csv/flat-training.csv")
@@ -65,6 +74,8 @@ def main():
         jitter=args.jitter,
         n_neighbors=args.n_neighbors,
         no_blend=no_blend,
+        cat_resample=args.cat_resample,
+        cat_swap_frac=args.cat_swap_frac,
         random_state=42,
     )
     synth.fit(X_train)
@@ -75,6 +86,7 @@ def main():
         synthetic = select_subset(X_train, synthetic, N_SAMPLES,
                                   iterations=args.select_iterations,
                                   rewarm_patience=args.select_rewarm,
+                                  separation_weight=args.select_separation_weight,
                                   random_state=42, verbose=True)
     elif len(synthetic) > N_SAMPLES:
         synthetic = synthetic.sample(N_SAMPLES, random_state=42).reset_index(drop=True)
