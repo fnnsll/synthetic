@@ -21,10 +21,13 @@ def run_qa_report(
     trn: pd.DataFrame,
     hol: pd.DataFrame,
     report_path: str | Path = "nogan-report.html",
+    random_state: int | None = None,
 ):
     from mostlyai import qa
 
     qa.init_logging()
+    if random_state is not None:
+        qa.set_random_state(random_state)  # matches the prize's per-run seeding
     return qa.report(
         syn_tgt_data=syn, trn_tgt_data=trn, hol_tgt_data=hol, report_path=report_path
     )

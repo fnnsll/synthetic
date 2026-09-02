@@ -47,6 +47,7 @@ Sklearn-style (`fit`/`sample`) synthesizers plus supporting diagnostic tools.
 | `relationships.py` | `find_sum_relationships`, `correlation_clusters` — detect columns related by a sum, and group columns into correlation clusters. |
 | `reweighting.py` | Kernel Mean Matching (`kernel_mean_match`, `joint_kmm_weights`) and its Nyström-approximated large-scale version, for reweighting a synthetic sample toward matching a real joint distribution. |
 | `search.py` | `robustness_search` — multi-split hyperparameter search using `discriminator_auc` as the objective. |
+| `resample.py` | `select_subset` — greedy simulated-annealing pool-subset selection, generator-agnostic reimplementation of the post-processing stage from the [MOSTLY AI Prize](https://github.com/mostly-ai/the-prize-eval) Flat Data Challenge winner's pipeline, [`Gandagorn/mostlyai_flat`](https://github.com/Gandagorn/mostlyai_flat) (MIT). Load-bearing for the privacy/accuracy tradeoff — see `CLAUDE.md` for findings. |
 
 ## Scripts: `scripts/`
 
@@ -56,6 +57,7 @@ Sklearn-style (`fit`/`sample`) synthesizers plus supporting diagnostic tools.
 | `run_nogan_prototype.py` | Full QA report for `NoGANSynthesizer` (mixup baseline). |
 | `run_old_method_report.py` | QA report for the old notebook pipeline's saved output, for comparison. |
 | `tune_nogan.py` | Hyperparameter sweep for `NoGANSynthesizer` via `search.robustness_search`. |
+| `ingest_prize_eval.py` | Downloads the [MOSTLY AI Prize](https://github.com/mostly-ai/the-prize-eval) stage-1/stage-2 holdout+test CSVs into `csv/prize/`, for scoring against the real (unseen-during-training) prize holdout instead of a self-made split. |
 
 ## Tests
 

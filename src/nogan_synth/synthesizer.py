@@ -14,6 +14,16 @@ fundamental leak than the covariance one. No adversarial training, no
 gradient descent -- the "model" is {X, embedding, tau} per the RBF
 kernel-memorization method.
 
+Categoricals default to a weighted pick among the n_mix blend members
+(`cat_resample="copy"`), which at small jitter is ~always the primary
+neighbor -- so a synthetic row's 20-column categorical tuple is a verbatim
+copy of one training row's, and that is exactly nogan's DCR/NNDR failure
+mode on the MOSTLY AI Prize eval. `cat_resample="kernel"` instead draws
+each categorical column independently from the seed's kernel-weighted
+neighbor window, so the tuple is a local recombination, not a copy. It
+trades categorical joint fidelity for record-level privacy; pair it with
+the marginal selector in nogan_synth.resample to recover the joint.
+
 A Gaussian-copula numeric mode was tried and dropped: ~29 of this
 dataset's 60 numeric columns are point-mass/near-binary (>30% of rows
 tied to one value), and the copula's inverse-ECDF decode collapses joint
@@ -57,6 +67,8 @@ class NoGANSynthesizer(BaseEstimator):
         n_mix: int = 2,
         match_marginals: bool | list[str] = False,
         no_blend: list[str] = (),
+        cat_resample: str = "copy",
+        cat_block_threshold: float = 0.15,
         random_state: int | None = None,
     ):
         self.embedding = embedding
@@ -67,6 +79,8 @@ class NoGANSynthesizer(BaseEstimator):
         self.n_mix = n_mix
         self.match_marginals = match_marginals
         self.no_blend = no_blend
+        self.cat_resample = cat_resample
+        self.cat_block_threshold = cat_block_threshold
         self.random_state = random_state
 
     def fit(self, X: pd.DataFrame) -> "NoGANSynthesizer":
@@ -90,6 +104,7 @@ class NoGANSynthesizer(BaseEstimator):
         num_cols = self.X_.select_dtypes(exclude="object").columns.tolist()
         self.num_cols_ = num_cols
         self.cat_cols_ = self.X_.select_dtypes(include="object").columns.tolist()
+        self.cat_blocks_ = self._derive_cat_blocks()
         self.int_cols_mask_ = np.array(
             [pd.api.types.is_integer_dtype(self.X_[c]) for c in num_cols]
         )
@@ -232,12 +247,71 @@ class NoGANSynthesizer(BaseEstimator):
         choice_idx = np.clip(choice_idx, 0, n_mix - 1)
         return np.take_along_axis(stack, choice_idx[:, None, :], axis=1)[:, 0, :]
 
+    def _derive_cat_blocks(self) -> list[list[str]]:
+        """Group categorical columns into correlated blocks (association-graph
+        connected components). `cat_resample="block"` draws one kernel neighbor
+        per block, so the strong within-block joint is copied intact from a
+        real row while the full tuple across blocks is a recombination -- the
+        privacy win without the joint-destroying per-column independence.
+        """
+        import networkx as nx
+
+        from .tree_synth import association_matrix
+
+        cols = self.cat_cols_
+        if len(cols) < 2:
+            return [list(cols)]
+        A = association_matrix(self.X_[cols], cols)
+        G = nx.Graph()
+        G.add_nodes_from(cols)
+        for i, a in enumerate(cols):
+            for b in cols[i + 1 :]:
+                if A.loc[a, b] >= self.cat_block_threshold:
+                    G.add_edge(a, b)
+        return [sorted(c) for c in nx.connected_components(G)]
+
+    def _kernel_cat_resample(
+        self, seeds: np.ndarray, rng: np.random.Generator
+    ) -> np.ndarray:
+        """Kernel-weighted categorical draw from each seed's neighbor window,
+        breaking the "whole tuple copied from one neighbor" pattern behind
+        nogan's DCR/NNDR failure.
+
+        - "kernel": one independent draw per (row, column). Maximum tuple
+          novelty, but per-column independence wrecks the 20-way joint (a
+          discriminator then separates trivially on this dense dataset).
+        - "block": one draw per (row, correlated block). Within-block joint
+          copied intact from a real row; cross-block combination is new.
+        """
+        dists = self.neighbor_dist_[seeds]
+        log_w = -self.tau_ * dists**2
+        win_idx = self.neighbor_idx_[seeds]
+        rows = np.arange(len(seeds))
+        col_pos = {c: j for j, c in enumerate(self.cat_cols_)}
+        groups = (
+            [[c] for c in self.cat_cols_]
+            if self.cat_resample == "kernel"
+            else self.cat_blocks_
+        )
+        out = np.empty((len(seeds), len(self.cat_cols_)), dtype=object)
+        for grp in groups:
+            gumbel = -np.log(-np.log(rng.uniform(size=log_w.shape) + 1e-300) + 1e-300)
+            picked = win_idx[rows, np.argmax(log_w + gumbel, axis=1)]
+            for c in grp:
+                out[:, col_pos[c]] = self.X_[c].to_numpy()[picked]
+        return out
+
     def sample(self, n_samples: int) -> pd.DataFrame:
         rng = np.random.default_rng(self.random_state)
         n_train = len(self.X_)
         n_mix = max(1, min(self.n_mix, len(self.neighbor_idx_[0])))
 
         seeds = rng.integers(0, n_train, size=n_samples)
+        kernel_cats = (
+            self._kernel_cat_resample(seeds, rng)
+            if self.cat_resample in ("kernel", "block") and self.cat_cols_
+            else None
+        )
 
         if self.jitter and n_mix > 1:
             # Blend a shared-weight-vector centroid of n_mix kernel-drawn
@@ -289,10 +363,16 @@ class NoGANSynthesizer(BaseEstimator):
                 out = self._assign_numeric(out, blended)
 
             if self.cat_cols_:
-                cat_stack = self.X_[self.cat_cols_].to_numpy()[members]
-                out[self.cat_cols_] = self._weighted_pick(cat_stack, weights, rng)
+                if kernel_cats is not None:
+                    out[self.cat_cols_] = kernel_cats
+                else:
+                    cat_stack = self.X_[self.cat_cols_].to_numpy()[members]
+                    out[self.cat_cols_] = self._weighted_pick(cat_stack, weights, rng)
 
             return out
 
         _, primary_idx = self._kernel_choice(seeds, rng)
-        return self.X_.iloc[primary_idx].reset_index(drop=True)
+        out = self.X_.iloc[primary_idx].reset_index(drop=True)
+        if kernel_cats is not None:
+            out[self.cat_cols_] = kernel_cats
+        return out
